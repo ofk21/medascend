@@ -1,0 +1,283 @@
+// MedAscend – Prisma schema
+// Provider is PostgreSQL for production. For quick local trials you can switch
+// `provider` to "sqlite" and DATABASE_URL to "file:./dev.db" – no enums/JSON are
+// used so the schema is portable across both.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  name         String
+  role         String    @default("USER") // USER | ADMIN
+  trialEndsAt  DateTime?
+  theme        String    @default("system") // light | dark | system
+  examDate     DateTime?
+  lastActiveAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  subscriptions Subscription[]
+  sessions      Session[]
+  flags         Flag[]
+  notes         Note[]
+  resetTokens   PasswordResetToken[]
+  questions     Question[]           @relation("QuestionAuthor")
+}
+
+model Plan {
+  id           String  @id @default(cuid())
+  name         String
+  slug         String  @unique
+  durationDays Int
+  pricePence   Int
+  badge        String?
+  description  String?
+  features     String // newline separated
+  active       Boolean @default(true)
+  sortOrder    Int     @default(0)
+
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id               String   @id @default(cuid())
+  userId           String
+  planId           String
+  status           String   @default("ACTIVE") // ACTIVE | EXPIRED | CANCELLED | PENDING
+  startsAt         DateTime @default(now())
+  endsAt           DateTime
+  source           String   @default("STRIPE") // STRIPE | ADMIN
+  stripeSessionId  String?  @unique
+  stripeCustomerId String?
+  amountPence      Int      @default(0)
+  currency         String   @default("GBP")
+  createdAt        DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan Plan @relation(fields: [planId], references: [id])
+
+  @@index([userId])
+}
+
+model Specialty {
+  id             String  @id @default(cuid())
+  name           String  @unique
+  slug           String  @unique
+  blueprintCount Int     @default(0) // questions in the real 200-question exam
+  description    String?
+  sortOrder      Int     @default(0)
+
+  questions      Question[]
+  textbookTopics TextbookTopic[]
+}
+
+model Question {
+  id            String   @id @default(cuid())
+  specialtyId   String
+  topic         String   @default("")
+  stem          String
+  explanation   String
+  learningPoint String   @default("")
+  difficulty    Int      @default(2) // 1 easy, 2 moderate, 3 hard
+  tags          String   @default("") // comma separated
+  status        String   @default("PUBLISHED") // DRAFT | PUBLISHED | ARCHIVED
+  isTrial       Boolean  @default(false)
+  reference     String?
+  timesAnswered Int      @default(0)
+  timesCorrect  Int      @default(0)
+  createdById   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  specialty        Specialty         @relation(fields: [specialtyId], references: [id])
+  createdBy        User?             @relation("QuestionAuthor", fields: [createdById], references: [id])
+  options          Option[]
+  sessionQuestions SessionQuestion[]
+  paperQuestions   PaperQuestion[]
+  flags            Flag[]
+  notes            Note[]
+
+  @@index([specialtyId])
+  @@index([status])
+}
+
+model Option {
+  id          String  @id @default(cuid())
+  questionId  String
+  label       String // A-E
+  text        String
+  explanation String  @default("")
+  isCorrect   Boolean @default(false)
+  order       Int     @default(0)
+
+  question Question          @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  answers  SessionQuestion[]
+
+  @@index([questionId])
+}
+
+model Paper {
+  id              String   @id @default(cuid())
+  title           String
+  slug            String   @unique
+  description     String?
+  type            String   @default("PAST_PAPER") // PAST_PAPER | MOCK
+  durationMinutes Int      @default(180)
+  published       Boolean  @default(false)
+  sortOrder       Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  questions PaperQuestion[]
+  sessions  Session[]
+}
+
+model PaperQuestion {
+  paperId    String
+  questionId String
+  order      Int
+
+  paper    Paper    @relation(fields: [paperId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@id([paperId, questionId])
+}
+
+model Session {
+  id             String    @id @default(cuid())
+  userId         String
+  type           String    @default("PRACTICE") // PRACTICE | PAPER | MOCK
+  mode           String    @default("TUTOR") // TUTOR | TIMED
+  title          String
+  status         String    @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED | ABANDONED
+  paperId        String?
+  timeLimitSec   Int?
+  filtersJson    String    @default("{}")
+  totalQuestions Int
+  correctCount   Int       @default(0)
+  answeredCount  Int       @default(0)
+  currentIndex   Int       @default(0)
+  startedAt      DateTime  @default(now())
+  completedAt    DateTime?
+
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  paper     Paper?            @relation(fields: [paperId], references: [id])
+  questions SessionQuestion[]
+
+  @@index([userId, status])
+}
+
+model SessionQuestion {
+  id               String    @id @default(cuid())
+  sessionId        String
+  questionId       String
+  order            Int
+  selectedOptionId String?
+  isCorrect        Boolean?
+  answeredAt       DateTime?
+  timeSpentSec     Int       @default(0)
+
+  session        Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  question       Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  selectedOption Option?  @relation(fields: [selectedOptionId], references: [id])
+
+  @@unique([sessionId, order])
+  @@index([questionId])
+}
+
+model Flag {
+  userId     String
+  questionId String
+  createdAt  DateTime @default(now())
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@id([userId, questionId])
+}
+
+model Note {
+  id         String   @id @default(cuid())
+  userId     String
+  questionId String?
+  title      String   @default("")
+  body       String
+  label      String   @default("") // e.g. weak-area, mnemonic, exam
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question Question? @relation(fields: [questionId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+}
+
+model TextbookTopic {
+  id             String   @id @default(cuid())
+  specialtyId    String
+  title          String
+  slug           String   @unique
+  summary        String   @default("")
+  content        String
+  readingMinutes Int      @default(5)
+  published      Boolean  @default(true)
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  specialty Specialty @relation(fields: [specialtyId], references: [id])
+
+  @@index([specialtyId])
+}
+
+model Article {
+  id             String   @id @default(cuid())
+  title          String
+  slug           String   @unique
+  excerpt        String
+  content        String
+  author         String   @default("MedAscend Editorial Team")
+  coverEmoji     String   @default("📘")
+  readingMinutes Int      @default(6)
+  published      Boolean  @default(true)
+  publishedAt    DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model Testimonial {
+  id        String  @id @default(cuid())
+  name      String
+  role      String
+  quote     String
+  rating    Int     @default(5)
+  published Boolean @default(true)
+  sortOrder Int     @default(0)
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  token     String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ContactMessage {
+  id        String   @id @default(cuid())
+  name      String
+  email     String
+  subject   String
+  message   String
+  createdAt DateTime @default(now())
+  handled   Boolean  @default(false)
+}
